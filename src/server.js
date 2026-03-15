@@ -262,7 +262,15 @@ const mcpDeleteHandler = async (req, res) => {
   await transport.handleRequest(req, res);
 };
 
-const app = createMcpExpressApp();
+const allowedHosts = process.env.MCP_ALLOWED_HOSTS
+  ? process.env.MCP_ALLOWED_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+  : [
+      "127.0.0.1",
+      "localhost",
+      "::1"
+    ];
+
+const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts });
 app.post("/mcp", mcpPostHandler);
 app.get("/mcp", mcpGetHandler);
 app.delete("/mcp", mcpDeleteHandler);
