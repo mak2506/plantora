@@ -10,8 +10,8 @@ const sessions = new Map();
  * @returns {Object} The session object
  */
 export function getSession(sessionId) {
-  if (!sessionId) return null;
   if (!sessions.has(sessionId)) {
+    console.log(`[Sessions] Creating NEW session object for: ${sessionId}`);
     sessions.set(sessionId, {
       id: sessionId,
       answers: {},
@@ -20,6 +20,8 @@ export function getSession(sessionId) {
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+  } else {
+    console.log(`[Sessions] Retrieving EXISTING session: ${sessionId}`);
   }
   const session = sessions.get(sessionId);
   session.updatedAt = new Date().toISOString();

@@ -21,6 +21,19 @@ const WELCOME_URI = "ui://plantora/welcome.html";
 const QUIZ_URI = "ui://plantora/quiz.html";
 const RESULTS_URI = "ui://plantora/results.html";
 
+const PERSONALITY_TRAITS = [
+  "Social Energy (Introversion vs. Extroversion)",
+  "Stress Response (Resilient vs. Sensitive)",
+  "Growth Mindset (Ambitious vs. Contented)",
+  "Environmental Adaptability (Flexible vs. Set in ways)",
+  "Emotional Expression (Vibrant/Open vs. Subtle/Reserved)",
+  "Decision Making (Spontaneous vs. Calculated)",
+  "Structure Preference (Organized vs. Free-spirited)",
+  "Connection to Others (Independent vs. Collaborative)",
+  "Energy Cycle (Morning person vs. Night owl)",
+  "Resource Management (Cautious vs. Generous)"
+];
+
 function createMcpServer(getSessionId) {
   const mcpServer = new McpServer({
     name: "plantora",
@@ -108,15 +121,17 @@ function createMcpServer(getSessionId) {
       },
     },
     async () => {
-      console.log("[Tool: start] Initializing quiz session and generating first question...");
-      const session = getSession(getSessionId());
+      const sid = getSessionId();
+      console.log(`[Tool: start] Session ID: ${sid}`);
+      const session = getSession(sid);
       if (session) {
         session.questions = [];
         session.answers = {};
       }
 
-      const prompt = `Generate exactly ONE unique, creative, and plant-themed multiple-choice question (4 options) to help determine a user's personality for a "Which flower are you?" quiz. 
-      This is the FIRST question. Focus on a general personality trait (e.g., introversion vs extroversion).
+      const trait = PERSONALITY_TRAITS[0];
+      const prompt = `Generate exactly ONE unique, creative, and plant-themed multiple-choice question (4 options) for a "Which flower are you?" quiz.
+      This is the FIRST question. Focus STRICTLY on the personality trait: ${trait}.
       Important: ALWAYS return valid JSON.
       Format:
       {
@@ -140,6 +155,7 @@ function createMcpServer(getSessionId) {
         const jsonStart = responseText.indexOf('{');
         const jsonEnd = responseText.lastIndexOf('}') + 1;
         const question = JSON.parse(responseText.substring(jsonStart, jsonEnd));
+        console.log(`[Tool: start] Generated Q1 (Trait: ${trait}): ${question.text}`);
         
         if (session) {
           session.questions = [question];
@@ -150,10 +166,10 @@ function createMcpServer(getSessionId) {
           content: [
             {
               type: "text",
-              text: "The personality quiz has started. A dedicated UI has been presented to the user to answer the questions. Stand by for the user to complete the quiz in the UI.",
+              text: `The personality quiz has started. SESSION_ID: ${sid}. A dedicated UI has been presented. IMPORTANT: You must provide this SESSION_ID in all future tool calls for this user to maintain their progress.`,
             },
           ],
-          structuredContent: { questions: [question], currentCount: 1, totalCount: 10, isComplete: false },
+          structuredContent: { sessionId: sid, questions: [question], currentCount: 1, totalCount: 10, isComplete: false, trait: trait },
         };
       } catch (err) {
         console.error("LLM start error:", err);
@@ -172,9 +188,11 @@ function createMcpServer(getSessionId) {
       inputSchema: {
         answers: z
           .record(z.string(), z.string())
-          .describe(
-            "The user's answer for the current question, e.g. { q1: 'a' }"
-          ),
+          .describe("The user's answer, e.g. { q1: 'a' }"),
+        sessionId: z
+          .string()
+          .optional()
+          .describe("The unique session ID from the 'start' tool. REQUIRED for state persistence."),
       },
       _meta: {
         ui: { resourceUri: QUIZ_URI },
@@ -183,21 +201,31 @@ function createMcpServer(getSessionId) {
         "openai/toolInvocation/invoked": "Answers submitted"
       },
     },
-    async ({ answers }) => {
-      console.log(`[Tool: submit_answers] Received answers: ${JSON.stringify(answers)}`);
-      const session = getSession(getSessionId());
+    async ({ answers, sessionId }) => {
+      const sid = sessionId || getSessionId();
+      console.log(`[Tool: submit_answers] Using Sid: ${sid}, Received: ${JSON.stringify(answers)}`);
+      const session = getSession(sid);
       if (session) {
-        session.answers = { ...session.answers, ...answers };
+        // Only update if answers are provided
+        if (answers && Object.keys(answers).length > 0) {
+          session.answers = { ...session.answers, ...answers };
+        }
+        
         const currentCount = session.questions.length;
+        console.log(`[Tool: submit_answers] History Count: ${currentCount}, Total: 10`);
 
         if (currentCount < 10) {
           // Generate next question
-          const history = session.questions.map(q => q.text).join(" | ");
+          const currentTrait = PERSONALITY_TRAITS[currentCount];
           const nextId = `q${currentCount + 1}`;
-          const prompt = `Generate exactly ONE unique, creative, and plant-themed multiple-choice question (4 options) for a "Which flower are you?" quiz. 
-          Focus on a COMPLETELY DIFFERENT personality dimension than previous questions (e.g., if previous were about social style, make this about stress response, risk, or environment).
-          Important: MUST NOT be semantically similar to these previous questions: ${history}.
-          We are on question ${currentCount + 1} of 10.
+          const prompt = `Generate exactly ONE unique, creative multiple-choice question (4 options) for a "Which flower are you?" quiz. 
+          
+          CRITICAL INSTRUCTION: You MUST focus ONLY on this specific personality dimension: ${currentTrait}.
+          CONTEXT: We are on question ${currentCount + 1} of 10. 
+          
+          PREVIOUS THEMES (DO NOT REPEAT): ${PERSONALITY_TRAITS.slice(0, currentCount).join(", ")}.
+          
+          Important: Return ONLY valid JSON.
           Format your response as a JSON object:
           {
             "id": "${nextId}",
@@ -219,6 +247,7 @@ function createMcpServer(getSessionId) {
             const jsonStart = responseText.indexOf('{');
             const jsonEnd = responseText.lastIndexOf('}') + 1;
             const nextQuestion = JSON.parse(responseText.substring(jsonStart, jsonEnd));
+            console.log(`[Tool: submit_answers] Generated Q${currentCount + 1} (Trait: ${currentTrait}): ${nextQuestion.text}`);
             
             session.questions.push(nextQuestion);
             session.progress = currentCount + 1;
@@ -231,7 +260,8 @@ function createMcpServer(getSessionId) {
                 nextQuestion,
                 currentCount: currentCount + 1,
                 totalCount: 10,
-                isComplete: false
+                isComplete: false,
+                trait: currentTrait
               },
             };
           } catch (err) {
@@ -269,9 +299,11 @@ function createMcpServer(getSessionId) {
         answers: z
           .record(z.string(), z.string())
           .optional()
-          .describe(
-            "Optional: Object mapping question IDs to option values. If not provided, session data will be used."
-          ),
+          .describe("Optional answers map."),
+        sessionId: z
+          .string()
+          .optional()
+          .describe("The unique session ID from the 'start' tool. REQUIRED for state persistence."),
       },
       _meta: {
         ui: { resourceUri: RESULTS_URI },
@@ -280,15 +312,20 @@ function createMcpServer(getSessionId) {
         "openai/toolInvocation/invoked": "Results ready"
       },
     },
-    async () => {
-      const session = getSession(getSessionId());
+    async ({ sessionId }) => {
+      const sid = sessionId || getSessionId();
+      console.log(`[Tool: show_results] Using Sid: ${sid}`);
+      const session = getSession(sid);
       if (!session || Object.keys(session.answers).length === 0) {
         return { content: [{type:"text", text:"No quiz data found to calculate results."}], structuredContent: { success: false } };
       }
 
       const flowersData = JSON.parse(readFileSync(join(__dirname, "..", "data", "flowers.json"), "utf-8"));
       const userAnswers = JSON.stringify(session.answers);
-      const questionHistory = JSON.stringify(session.questions.map(q => ({ q: q.text, a: session.answers[q.id] })));
+      const questionHistoryArr = session.questions.map(q => ({ q: q.text, a: session.answers[q.id] }));
+      const questionHistory = JSON.stringify(questionHistoryArr);
+      
+      console.log(`[Tool: show_results] Analyzing history: ${questionHistory}`);
 
       const prompt = `Analyze this user's personality based on their answers to a 10-question flower quiz and identify which flower from the provided list matches them best.
       
@@ -310,20 +347,44 @@ function createMcpServer(getSessionId) {
         console.log("[Tool: show_results] Requesting personality match from Groq...");
         const responseText = await callGroq({ 
           prompt, 
-          system: "You are a professional personality psychologist and botanist who only outputs JSON.",
-          model: "llama-3.3-70b-versatile"
+          system: "You are a professional personality psychologist and botanist who only outputs JSON. Be concise but deep in your descriptions.",
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.3 // Lower temperature for more consistent JSON results
         });
-        console.log(`[Tool: show_results] LLM raw response length: ${responseText.length}`);
-        const jsonStart = responseText.indexOf('{');
-        const jsonEnd = responseText.lastIndexOf('}') + 1;
-        const result = JSON.parse(responseText.substring(jsonStart, jsonEnd));
+        
+        console.log(`[Tool: show_results] LLM raw response: ${responseText}`);
+        
+        let result;
+        try {
+          const jsonStart = responseText.indexOf('{');
+          const jsonEnd = responseText.lastIndexOf('}') + 1;
+          const parsed = JSON.parse(responseText.substring(jsonStart, jsonEnd));
+          // Handle both { flower: { ... } } and direct { id, name, description }
+          result = parsed.flower || parsed;
+        } catch (parseErr) {
+          console.error("[Tool: show_results] JSON parse failed, trying fallback extraction...");
+          // Simple fallback extraction if JSON is messy
+          const nameMatch = responseText.match(/"name":\s*"([^"]+)"/);
+          const descMatch = responseText.match(/"description":\s*"([^"]+)"/);
+          const idMatch = responseText.match(/"id":\s*"([^"]+)"/);
+          
+          if (nameMatch && descMatch) {
+            result = {
+              id: idMatch ? idMatch[1] : 'unknown',
+              name: nameMatch[1],
+              description: descMatch[1]
+            };
+          } else {
+            throw parseErr;
+          }
+        }
         
         session.progress = 'complete';
         
         return {
-          content: [{ type: "text", text: `Your results are ready! You are a ${result.flower.name}.\n\n[The results are visible in the UI.]` }],
+          content: [{ type: "text", text: `Your results are ready! You are a ${result.name}.\n\n[The results are visible in the UI.]` }],
           structuredContent: {
-            flower: result.flower,
+            flower: result,
             answers: session.answers
           },
         };
@@ -357,7 +418,10 @@ const PORT = parseInt(process.env.PORT || "3553", 10);
 const requestListener = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const sessionId = req.headers["mcp-session-id"];
-  console.log(`[Server] ${req.method} ${url.pathname} (Session ID: ${sessionId || 'new'})`);
+  
+  // DEBUG: Log all headers to find stable host-provided IDs
+  console.log(`[Server] ${req.method} ${url.pathname}`);
+  console.log(`[Server] Headers: ${JSON.stringify(req.headers, null, 2)}`);
 
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -401,8 +465,10 @@ const requestListener = async (req, res) => {
         });
 
         if (isInitializeRequest(body)) {
-          const sid = randomUUID();
-          console.log(`[Server] Initializing NEW session: ${sid}`);
+          // REUSE sessionId from header if provided and valid, otherwise new
+          const sid = (sessionId && getSession(sessionId)) ? sessionId : randomUUID();
+          console.log(`[Server] Initializing session: ${sid} (${sessionId === sid ? 'REUSED' : 'NEW'})`);
+          
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => sid,
             onsessioninitialized: (finalSid) => {
@@ -426,6 +492,10 @@ const requestListener = async (req, res) => {
       }
 
       if (transport) {
+        if (transport.sessionId) {
+          res.setHeader('mcp-session-id', transport.sessionId);
+        }
+        
         if (req.method === 'POST') {
           const body = await new Promise((resolve, reject) => {
             let data = '';
