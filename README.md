@@ -18,6 +18,20 @@ The goal of this project was to learn how to:
 
 ---
 
+## 📸 Visuals
+
+````carousel
+![Welcome Screen (Light Mode)](screenshots/welcome-light.png)
+<!-- slide -->
+![Welcome Screen (Dark Mode)](screenshots/welcome-dark.png)
+<!-- slide -->
+![Quiz Screen](screenshots/quiz.png)
+<!-- slide -->
+![Results Screen](screenshots/result.png)
+````
+
+---
+
 ## ⚡ Local Setup
 
 ### 1. Installation
